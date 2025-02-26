@@ -1,0 +1,20 @@
+[package]
+name = "fastdata-indexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenv = "0.15.0"
+openssl-probe = { version = "0.1.5" }
+fastnear-primitives = "0.1.0"
+fastnear-neardata-fetcher = "0.1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3.12.0"
+reqwest = { version = "0.12.2", features = ["json"] }
+tokio = { version = "1.38", features = ["time", "sync", "rt-multi-thread", "macros"] }
+tracing = { version = "0.1.13", features = ["log"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+borsh = { version = "1.5.0", features = ["derive"] }
+ctrlc = "3"
+redis = { version = "0.26.0", features = ["tokio-comp", "tokio-native-tls-comp", "streams"] }

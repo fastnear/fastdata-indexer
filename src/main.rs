@@ -1,6 +1,9 @@
+mod fastfs;
 mod redis_db;
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use dotenv::dotenv;
+use fastfs::*;
 use fastnear_neardata_fetcher::{fetcher, FetcherConfig};
 use fastnear_primitives::near_indexer_primitives::types::BlockHeight;
 use fastnear_primitives::near_indexer_primitives::CryptoHash;
@@ -17,6 +20,8 @@ use tokio::sync::mpsc;
 
 const FASTDATA_PREFIX: &str = "__fastdata_";
 const PROJECT_ID: &str = "fastdata-indexer";
+
+const FASTDATA_FASTFS_SUFFIX: &str = "fastfs";
 
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +47,23 @@ impl FastData {
 async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
+
+    // println!(
+    //     "{}",
+    //     serde_json::to_string(&FastfsFileContent {
+    //         mime_type: "text/plain".to_string(),
+    //         content: borsh::to_vec(&FastfsData::Simple(Box::new(SimpleFastfs {
+    //             relative_path: "test.txt".to_string(),
+    //             content: Some(FastfsFileContent {
+    //                 mime_type: "text/plain".to_string(),
+    //                 content: b"hello world".to_vec(),
+    //             }),
+    //         })))
+    //         .unwrap()
+    //     })
+    //     .unwrap()
+    // );
+    // panic!("yo");
 
     tracing_subscriber::fmt()
         .with_env_filter("redis=info")
@@ -177,6 +199,21 @@ async fn main() {
                     .arg(d.redis_key())
                     .arg(serde_json::to_string(&d).unwrap())
                     .ignore();
+
+                if d.suffix == FASTDATA_FASTFS_SUFFIX {
+                    if let Ok(FastfsData::Simple(fastfs_data)) = borsh::from_slice(&d.data) {
+                        if let Some(key) = fastfs_key(&d, &fastfs_data) {
+                            if let Some(content) = &fastfs_data.content {
+                                pipe.cmd("SET")
+                                    .arg(fastfs_key(&d, &fastfs_data))
+                                    .arg(serde_json::to_string(&content).unwrap())
+                                    .ignore();
+                            } else {
+                                pipe.cmd("DEL").arg(key).ignore();
+                            }
+                        }
+                    }
+                }
             }
 
             pipe.set("meta:last_block_height", block_height).ignore();

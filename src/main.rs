@@ -4,7 +4,7 @@ mod redis_db;
 use borsh::{BorshDeserialize, BorshSerialize};
 use dotenv::dotenv;
 use fastfs::*;
-use fastnear_neardata_fetcher::{fetcher, FetcherConfig};
+use fastnear_neardata_fetcher::fetcher;
 use fastnear_primitives::near_indexer_primitives::types::BlockHeight;
 use fastnear_primitives::near_indexer_primitives::CryptoHash;
 use fastnear_primitives::near_primitives::types::AccountId;
@@ -48,15 +48,16 @@ async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
 
+    // const DEMO_BYTES: &[u8] = include_bytes!("../demo.html");
     // println!(
     //     "{}",
     //     serde_json::to_string(&FastfsFileContent {
-    //         mime_type: "text/plain".to_string(),
+    //         mime_type: "skip".to_string(),
     //         content: borsh::to_vec(&FastfsData::Simple(Box::new(SimpleFastfs {
-    //             relative_path: "test.txt".to_string(),
+    //             relative_path: "index.html".to_string(),
     //             content: Some(FastfsFileContent {
-    //                 mime_type: "text/plain".to_string(),
-    //                 content: b"hello world".to_vec(),
+    //                 mime_type: "text/html".to_string(),
+    //                 content: DEMO_BYTES.to_vec(),
     //             }),
     //         })))
     //         .unwrap()
@@ -114,6 +115,12 @@ async fn main() {
         });
 
     let auth_bearer_token = env::var("FASTNEAR_AUTH_BEARER_TOKEN").ok();
+    let mut config = fetcher::FetcherConfigBuilder::new()
+        .start_block_height(start_block_height)
+        .chain_id(chain_id);
+    if let Some(token) = auth_bearer_token.clone() {
+        config = config.auth_bearer_token(token);
+    }
 
     let is_running = Arc::new(AtomicBool::new(true));
     let ctrl_c_running = is_running.clone();
@@ -134,16 +141,7 @@ async fn main() {
 
     let (sender, mut receiver) = mpsc::channel(320);
     tokio::spawn(fetcher::start_fetcher(
-        None,
-        FetcherConfig {
-            num_threads,
-            start_block_height,
-            chain_id,
-            timeout_duration: None,
-            retry_duration: None,
-            disable_archive_sync: false,
-            auth_bearer_token,
-        },
+        config.build(),
         sender,
         is_running.clone(),
     ));

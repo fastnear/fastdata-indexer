@@ -4,11 +4,8 @@ use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::statement::prepared::PreparedStatement;
 
-use anyhow::anyhow;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer}; // Using types re-exported by rustls
+use rustls::pki_types::pem::PemObject;
 use rustls::{ClientConfig, RootCertStore};
-use std::fs::File;
-use std::io::BufReader;
 use std::sync::Arc;
 use std::{env, io};
 
@@ -22,117 +19,41 @@ pub struct ScyllaDb {
     scylla_session: Session,
 }
 
-// Helper function to load certificates from a PEM file path
-// (assuming rustls_pemfile::certs returns an iterator as per your information)
-fn load_certs_from_path(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
-    let file =
-        File::open(path).map_err(|e| anyhow!("Failed to open certificate file {}: {}", path, e))?;
-    let mut reader = BufReader::new(file);
+pub fn create_rustls_client_config() -> Arc<ClientConfig> {
+    let ca_cert_path =
+        env::var("SCYLLA_SSL_CA").expect("SCYLLA_SSL_CA environment variable not set");
+    let client_cert_path =
+        env::var("SCYLLA_SSL_CERT").expect("SCYLLA_SSL_CERT environment variable not set");
+    let client_key_path =
+        env::var("SCYLLA_SSL_KEY").expect("SCYLLA_SSL_KEY environment variable not set");
 
-    // If rustls_pemfile::certs returns an iterator of Results:
-    let certs_iter = rustls_pemfile::certs(&mut reader);
+    let ca_certs = rustls::pki_types::CertificateDer::from_pem_file(ca_cert_path)
+        .expect("Failed to load CA certs");
+    let client_certs = rustls::pki_types::CertificateDer::from_pem_file(client_cert_path)
+        .expect("Failed to load client certs");
+    let client_key = rustls::pki_types::PrivateKeyDer::from_pem_file(client_key_path)
+        .expect("Failed to load client key");
 
-    // Collect the results from the iterator.
-    // This will iterate through, and if any item is an Err, collect will return that Err.
-    // If all items are Ok, it will collect them into a Vec.
-    let certs: Vec<CertificateDer<'static>> = certs_iter
-        .collect::<Result<Vec<_>, io::Error>>() // Collect into Result<Vec<CertificateDer>, io::Error>
-        .map_err(|e| anyhow!("Failed to parse a certificate from {}: {}", path, e))?; // Map the io::Error to anyhow::Error
-
-    if certs.is_empty() {
-        anyhow::bail!("No PEM certificates found in {}", path);
-    }
-    Ok(certs)
-}
-
-// Helper function to load a private key from a PEM file path
-fn load_private_key_from_path(path: &str) -> anyhow::Result<PrivateKeyDer<'static>> {
-    let file =
-        File::open(path).map_err(|e| anyhow!("Failed to open private key file {}: {}", path, e))?;
-    let mut reader = BufReader::new(file);
-
-    // rustls_pemfile::private_key attempts to parse the first valid PEM-encoded
-    // PKCS#1, PKCS#8, or SEC1 private key.
-    match rustls_pemfile::private_key(&mut reader)
-        .map_err(|e| anyhow!("Failed to read private key from {}: {}", path, e))?
-    {
-        Some(key) => Ok(key),
-        None => anyhow::bail!("No private key found in PEM format in {}", path),
-    }
-}
-
-pub async fn create_rustls_client_config() -> anyhow::Result<Arc<ClientConfig>> {
-    // 1. Read certificate paths from environment variables
-    let ca_cert_path = env::var("SCYLLA_SSL_CA")
-        .map_err(|e| anyhow!("SCYLLA_SSL_CA environment variable not set: {}", e))?;
-    let client_cert_path = env::var("SCYLLA_SSL_CERT")
-        .map_err(|e| anyhow!("SCYLLA_SSL_CERT environment variable not set: {}", e))?;
-    let client_key_path = env::var("SCYLLA_SSL_KEY")
-        .map_err(|e| anyhow!("SCYLLA_SSL_KEY environment variable not set: {}", e))?;
-
-    // 2. Load CA certificates and populate the RootCertStore
-    let ca_certs = load_certs_from_path(&ca_cert_path)?;
     let mut root_store = RootCertStore::empty();
-    for cert in ca_certs {
-        root_store
-            .add(cert)
-            .map_err(|e| anyhow!("Failed to add CA certificate to root store: {}", e))?;
-    }
-    if root_store.is_empty() {
-        // Should be caught by load_certs_from_path, but good to double check
-        anyhow::bail!(
-            "No CA certificates successfully loaded from {}",
-            ca_cert_path
-        );
-    }
+    root_store.add(ca_certs).expect("Failed to add CA certs");
 
-    // 3. Load client certificate chain
-    let client_certs = load_certs_from_path(&client_cert_path)?;
-
-    // 4. Load client private key
-    let client_key = load_private_key_from_path(&client_key_path)?;
-
-    // 5. Build the ClientConfig
-    // ClientConfig::builder() by default (with 'std' feature) uses the default crypto provider
-    // and supports safe TLS protocol versions.
-    // .with_safe_defaults() explicitly sets up safe ciphersuites and protocol versions.
-    // .with_root_certificates() sets the CAs to trust for server verification.
-    // .with_client_auth_cert() provides the client's certificate and key for mutual TLS.
-    // This call also implicitly verifies that the key matches the certificate.
     let config = ClientConfig::builder()
         .with_root_certificates(root_store)
-        .with_client_auth_cert(client_certs, client_key)
-        .map_err(|e| anyhow!("Failed to build rustls client config: {}", e))?;
+        .with_client_auth_cert(vec![client_certs], client_key)
+        .expect("Failed to create client config");
 
-    Ok(Arc::new(config))
+    Arc::new(config)
 }
 
 impl ScyllaDb {
-    // async fn create_ssl_context() -> anyhow::Result<openssl::ssl::SslContext> {
-    //     // Initialize SslContextBuilder with TLS method
-    //     let ca_cert_path = std::env::var("SCYLLA_SSL_CA")?;
-    //     let client_cert_path = std::env::var("SCYLLA_SSL_CERT")?;
-    //     let client_key_path = std::env::var("SCYLLA_SSL_KEY")?;
-    //
-    //     let mut builder = openssl::ssl::SslContextBuilder::new(openssl::ssl::SslMethod::tls())?;
-    //     builder.set_ca_file(ca_cert_path)?;
-    //     builder.set_certificate_file(client_cert_path, openssl::ssl::SslFiletype::PEM)?;
-    //     builder.set_private_key_file(client_key_path, openssl::ssl::SslFiletype::PEM)?;
-    //     builder.set_verify(openssl::ssl::SslVerifyMode::PEER);
-    //     builder.check_private_key()?;
-    //     Ok(builder.build())
-    // }
-
     pub async fn new_scylla_session() -> anyhow::Result<Session> {
         let scylla_url = env::var("SCYLLA_URL").expect("SCYLLA_DB_URL must be set");
         let scylla_username = env::var("SCYLLA_USERNAME").expect("SCYLLA_USERNAME must be set");
         let scylla_password = env::var("SCYLLA_PASSWORD").expect("SCYLLA_PASSWORD must be set");
 
-        let ssl_context = create_rustls_client_config().await?;
-
         let session: Session = SessionBuilder::new()
             .known_node(scylla_url)
-            .tls_context(Some(ssl_context))
+            .tls_context(Some(create_rustls_client_config()))
             .authenticator_provider(Arc::new(
                 scylla::authentication::PlainTextAuthenticator::new(
                     scylla_username,

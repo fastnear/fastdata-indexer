@@ -25,5 +25,4 @@ anyhow.workspace = true
 num-bigint.workspace = true
 rustls.workspace = true
 num-traits.workspace = true
-rustls-pemfile.workspace = true
 

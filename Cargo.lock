@@ -1420,7 +1420,6 @@ dependencies = [
  "num-traits",
  "reqwest",
  "rustls",
- "rustls-pemfile",
  "scylla",
  "serde",
  "serde_json",

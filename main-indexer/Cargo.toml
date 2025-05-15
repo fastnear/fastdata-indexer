@@ -1,0 +1,23 @@
+[package]
+name = "main-indexer"
+description = "Indexer for FastData. Collects raw blobs from the neardata and stores them into scylladb."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+dotenv.workspace = true
+fastnear-primitives.workspace = true
+fastnear-neardata-fetcher.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ctrlc.workspace = true
+scylla.workspace = true
+anyhow.workspace = true
+rustls.workspace = true
+futures.workspace = true
+

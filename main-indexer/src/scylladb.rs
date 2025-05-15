@@ -151,7 +151,7 @@ impl ScyllaDb {
             "CREATE INDEX IF NOT EXISTS idx_receipt_id ON blobs (receipt_id)",
             "CREATE TABLE IF NOT EXISTS meta (
                 suffix text PRIMARY KEY,
-                last_processed_block_height bigint,
+                last_processed_block_height bigint
             )",
         ];
         for query in queries.iter() {

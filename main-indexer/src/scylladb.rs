@@ -1,5 +1,4 @@
 use crate::*;
-use num_traits::cast::ToPrimitive;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::statement::prepared::PreparedStatement;
@@ -7,11 +6,10 @@ use scylla::statement::prepared::PreparedStatement;
 use rustls::pki_types::pem::PemObject;
 use rustls::{ClientConfig, RootCertStore};
 use std::sync::Arc;
-use std::{env, io};
+
+const SCYLLADB: &str = "scylladb";
 
 pub struct ScyllaDb {
-    chain_id: ChainId,
-
     insert_blob_query: PreparedStatement,
     insert_last_processed_block_height_query: PreparedStatement,
     select_last_processed_block_height_query: PreparedStatement,
@@ -74,17 +72,16 @@ impl ScyllaDb {
     }
 
     pub async fn new(chain_id: ChainId, scylla_session: Session) -> anyhow::Result<Self> {
-        Self::create_keyspace(chain_id, &scylla_session).await?;
+        // Self::create_keyspace(chain_id, &scylla_session).await?;
         scylla_session
             .use_keyspace(format!("fastdata_{chain_id}"), false)
             .await?;
         Self::create_tables(&scylla_session).await?;
 
         Ok(Self {
-            chain_id,
             insert_blob_query: Self::prepare_query(
                 &scylla_session,
-                "INSERT INTO blobs (receipt_id, suffix, data, tx_hash, block_height, block_timestamp, shard_id, shard_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO blobs (receipt_id, action_index, suffix, data, tx_hash, signer_id, predecessor_id, current_account_id, block_height, block_timestamp, shard_id, receipt_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 scylla::frame::types::Consistency::LocalQuorum,
             )
             .await?,
@@ -113,6 +110,7 @@ impl ScyllaDb {
         Ok(scylla_db_session.prepare(query).await?)
     }
 
+    #[allow(unused)]
     pub async fn create_keyspace(
         chain_id: ChainId,
         scylla_session: &Session,
@@ -135,53 +133,53 @@ impl ScyllaDb {
     pub async fn create_tables(scylla_session: &Session) -> anyhow::Result<()> {
         let queries = [
             "CREATE TABLE IF NOT EXISTS blobs (
-                receipt_id text PRIMARY KEY,
-                suffix text NOT NULL,
-                data blob NOT NULL,
+                receipt_id text,
+                action_index int,
+                suffix text,
+                data blob,
                 tx_hash text,
-                block_height bigint NOT NULL,
-                block_timestamp timestamp NOT NULL,
-                shard_id int NOT NULL,
-                shard_index int NOT NULL
+                signer_id text,
+                predecessor_id text,
+                current_account_id text,
+                block_height bigint,
+                block_timestamp bigint,
+                shard_id int,
+                receipt_index int,
+                PRIMARY KEY (receipt_id, action_index)
             )",
             "CREATE INDEX IF NOT EXISTS idx_tx_hash ON blobs (tx_hash)",
-            "CREATE INDEX IF NOT EXISTS idx_suffix_block_shard ON blobs ((suffix), block_height, shard_id, shard_index)",
-            "CREATE INDEX IF NOT EXISTS idx_suffix_time_shard ON blobs ((suffix), timestamp, shard_id, shard_index)",
-            "CREATE INDEX IF NOT EXISTS idx_block_shard ON blobs ((block_height), shard_id, shard_index)",
+            // "CREATE INDEX IF NOT EXISTS idx_suffix_block_shard ON blobs ((suffix), block_height, shard_id, receipt_index)",
+            // "CREATE INDEX IF NOT EXISTS idx_suffix_time_shard ON blobs ((suffix), timestamp, shard_id, receipt_index)",
+            // "CREATE INDEX IF NOT EXISTS idx_block_shard ON blobs ((block_height), shard_id, receipt_index)",
             "CREATE TABLE IF NOT EXISTS meta (
-                suffix text primary key,
-                last_processed_block_height bigint NOT NULL,
+                suffix text PRIMARY KEY,
+                last_processed_block_height bigint,
             )",
         ];
         for query in queries.iter() {
+            tracing::debug!(target: SCYLLADB, "Creating table: {}", query);
             scylla_session.query_unpaged(*query, &[]).await?;
         }
         Ok(())
     }
 
-    pub async fn add_data(
-        &self,
-        receipt_id: CryptoHash,
-        suffix: &str,
-        data: Vec<u8>,
-        tx_hash: Option<CryptoHash>,
-        block_height: u64,
-        block_timestamp_ns: u64,
-        shard_id: u32,
-        shard_index: u32,
-    ) -> anyhow::Result<()> {
+    pub async fn add_data(&self, fastdata: FastData) -> anyhow::Result<()> {
         self.scylla_session
             .execute_unpaged(
                 &self.insert_blob_query,
                 (
-                    receipt_id.to_string(),
-                    suffix.to_string(),
-                    data,
-                    tx_hash.map(|h| h.to_string()),
-                    num_bigint::BigInt::from(block_height),
-                    (block_timestamp_ns / 1_000_000) as i64,
-                    shard_id as i32,
-                    shard_index as i32,
+                    fastdata.receipt_id.to_string(),
+                    fastdata.action_index as i32,
+                    fastdata.suffix.to_string(),
+                    fastdata.data,
+                    fastdata.tx_hash.map(|h| h.to_string()),
+                    fastdata.signer_id.to_string(),
+                    fastdata.predecessor_id.to_string(),
+                    fastdata.current_account_id.to_string(),
+                    fastdata.block_height as i64,
+                    fastdata.block_timestamp as i64,
+                    fastdata.shard_id as i32,
+                    fastdata.receipt_index as i32,
                 ),
             )
             .await?;
@@ -196,27 +194,24 @@ impl ScyllaDb {
         self.scylla_session
             .execute_unpaged(
                 &self.insert_last_processed_block_height_query,
-                (
-                    suffix.to_string(),
-                    num_bigint::BigInt::from(last_processed_block_height),
-                ),
+                (suffix.to_string(), last_processed_block_height as i64),
             )
             .await?;
         Ok(())
     }
 
-    pub async fn get_last_processed_block_height(&self, suffix: &str) -> anyhow::Result<u64> {
-        let (last_processed_block_height,) = self
+    pub async fn get_last_processed_block_height(
+        &self,
+        suffix: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        let rows = self
             .scylla_session
             .execute_unpaged(
                 &self.select_last_processed_block_height_query,
                 (suffix.to_string(),),
             )
             .await?
-            .into_rows_result()?
-            .single_row::<(num_bigint::BigInt,)>()?;
-        last_processed_block_height.to_u64().ok_or(anyhow::anyhow!(
-            "Failed to convert last_processed_block_height to u64"
-        ))
+            .into_rows_result()?;
+        Ok(rows.single_row::<(i64,)>().ok().map(|(v,)| v as _))
     }
 }

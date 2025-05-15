@@ -145,12 +145,10 @@ impl ScyllaDb {
                 block_timestamp bigint,
                 shard_id int,
                 receipt_index int,
-                PRIMARY KEY (receipt_id, action_index)
+                PRIMARY KEY ((suffix), block_height, shard_id, receipt_index, action_index, receipt_id)
             )",
             "CREATE INDEX IF NOT EXISTS idx_tx_hash ON blobs (tx_hash)",
-            // "CREATE INDEX IF NOT EXISTS idx_suffix_block_shard ON blobs ((suffix), block_height, shard_id, receipt_index)",
-            // "CREATE INDEX IF NOT EXISTS idx_suffix_time_shard ON blobs ((suffix), timestamp, shard_id, receipt_index)",
-            // "CREATE INDEX IF NOT EXISTS idx_block_shard ON blobs ((block_height), shard_id, receipt_index)",
+            "CREATE INDEX IF NOT EXISTS idx_receipt_id ON blobs (receipt_id)",
             "CREATE TABLE IF NOT EXISTS meta (
                 suffix text PRIMARY KEY,
                 last_processed_block_height bigint,

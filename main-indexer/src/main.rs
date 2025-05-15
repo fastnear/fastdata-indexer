@@ -1,22 +1,15 @@
-mod fastfs;
 mod scylladb;
 mod types;
 
 use crate::scylladb::ScyllaDb;
 use crate::types::*;
-use borsh::{BorshDeserialize, BorshSerialize};
 use dotenv::dotenv;
-use fastfs::*;
 use fastnear_neardata_fetcher::fetcher;
 use fastnear_primitives::near_indexer_primitives::types::BlockHeight;
 use fastnear_primitives::near_indexer_primitives::CryptoHash;
 use fastnear_primitives::near_primitives::types::AccountId;
 use fastnear_primitives::near_primitives::views::{ActionView, ReceiptEnumView};
 use fastnear_primitives::types::ChainId;
-use serde::{Deserialize, Serialize};
-use serde_with::base64::Base64;
-use serde_with::serde_as;
-use std::collections::HashMap;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,8 +18,6 @@ use tokio::sync::mpsc;
 const FASTDATA_PREFIX: &str = "__fastdata_";
 const PROJECT_ID: &str = "fastdata-indexer";
 const UNIVERSAL_SUFFIX: &str = "*";
-
-const FASTDATA_FASTFS_SUFFIX: &str = "fastfs";
 
 #[tokio::main]
 async fn main() {
@@ -101,16 +92,19 @@ async fn main() {
 
     let is_running = Arc::new(AtomicBool::new(true));
     let ctrl_c_running = is_running.clone();
-    let save_empty_meta_every_n_blocks: u64 = env::var("SAVE_EMPTY_META_EVERY_N_BLOCKS")
-        .ok()
-        .map(|num_last_blocks| num_last_blocks.parse().expect("Invalid number of blocks"))
-        .unwrap_or(1);
 
     ctrlc::set_handler(move || {
         ctrl_c_running.store(false, Ordering::SeqCst);
         tracing::info!(target: PROJECT_ID, "Received Ctrl+C, starting shutdown...");
     })
     .expect("Error setting Ctrl+C handler");
+
+    let block_update_interval = std::time::Duration::from_millis(
+        env::var("BLOCK_UPDATE_INTERVAL_MS")
+            .ok()
+            .map(|ms| ms.parse().expect("Invalid number of blocks"))
+            .unwrap_or(5000),
+    );
 
     tracing::info!(target: PROJECT_ID,
         "Starting {} fetcher with {} threads from height {}. Using auth token: {}",
@@ -127,7 +121,7 @@ async fn main() {
         is_running.clone(),
     ));
 
-    let mut num_unsaved_blocks = 0;
+    let mut last_block_update = std::time::SystemTime::now();
     while let Some(block) = receiver.recv().await {
         let block_height = block.block.header.height;
         let block_timestamp = block.block.header.timestamp;
@@ -174,9 +168,11 @@ async fn main() {
             }
         }
 
-        num_unsaved_blocks += 1;
-        let mut need_to_save_last_processed_block_height =
-            num_unsaved_blocks >= save_empty_meta_every_n_blocks;
+        let current_time = std::time::SystemTime::now();
+        let duration = current_time
+            .duration_since(last_block_update)
+            .expect("Time went backwards");
+        let mut need_to_save_last_processed_block_height = duration >= block_update_interval;
 
         if !data.is_empty() {
             tracing::info!(target: PROJECT_ID, "Inserting {} fastdata rows into Scylla", data.len());
@@ -203,7 +199,7 @@ async fn main() {
                 .set_last_processed_block_height(UNIVERSAL_SUFFIX, block_height)
                 .await
                 .expect("Error setting last processed block height");
-            num_unsaved_blocks = 0;
+            last_block_update = current_time;
         }
 
         if !is_running.load(Ordering::SeqCst) {

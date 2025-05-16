@@ -27,7 +27,7 @@ pub struct SuffixFetcher {
 }
 
 /// Configuration for the `SuffixFetcher`.
-/// 
+///
 /// This struct defines the parameters used to configure the behavior of the fetcher.
 pub struct SuffixFetcherConfig {
     /// The suffix to be fetched. This is a unique identifier used to determine
@@ -39,9 +39,8 @@ pub struct SuffixFetcherConfig {
     /// will determine the starting point automatically.
     pub start_block_height: Option<BlockHeight>,
 
-    /// The duration for which the fetcher will sleep between successive fetch attempts.
-    /// This controls the polling interval and can be used to manage the fetcher's
-    /// resource usage and responsiveness.
+    /// The duration for which the fetcher will sleep while waiting for the next universal last
+    /// processed block height. Consider using around 500ms.
     pub sleep_duration: Duration,
 }
 

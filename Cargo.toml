@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 resolver = "2"
 members = [
     "main-indexer",
+    "scylladb",
+    "suffix-fetcher",
+    "fastfs-sub-indexer",
 ]
 
 [workspace.dependencies]

@@ -1,15 +1,9 @@
-mod scylladb;
-mod types;
-
-use crate::scylladb::ScyllaDb;
-use crate::types::*;
 use dotenv::dotenv;
 use fastnear_neardata_fetcher::fetcher;
 use fastnear_primitives::near_indexer_primitives::types::BlockHeight;
-use fastnear_primitives::near_indexer_primitives::CryptoHash;
-use fastnear_primitives::near_primitives::types::AccountId;
 use fastnear_primitives::near_primitives::views::{ActionView, ReceiptEnumView};
 use fastnear_primitives::types::ChainId;
+use scylladb::{FastData, ScyllaDb, UNIVERSAL_SUFFIX};
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,7 +11,6 @@ use tokio::sync::mpsc;
 
 const FASTDATA_PREFIX: &str = "__fastdata_";
 const PROJECT_ID: &str = "fastdata-indexer";
-const UNIVERSAL_SUFFIX: &str = "*";
 
 #[tokio::main]
 async fn main() {
@@ -26,10 +19,6 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter("neardata-fetcher=info,fastdata-indexer=info,scylladb=info")
         .init();
-
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("Failed to install default provider");
 
     let chain_id: ChainId = env::var("CHAIN_ID")
         .expect("CHAIN_ID required")

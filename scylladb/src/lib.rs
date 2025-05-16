@@ -1,16 +1,24 @@
-use crate::*;
+use futures::StreamExt;
+mod types;
+
+pub use crate::types::{FastData, UNIVERSAL_SUFFIX};
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::statement::prepared::PreparedStatement;
 
+use crate::types::FastDataRow;
+use fastnear_primitives::types::ChainId;
+use futures::Stream;
 use rustls::pki_types::pem::PemObject;
 use rustls::{ClientConfig, RootCertStore};
+use std::env;
 use std::sync::Arc;
 
 const SCYLLADB: &str = "scylladb";
 
 pub struct ScyllaDb {
-    insert_blob_query: PreparedStatement,
+    insert_fastdata_query: PreparedStatement,
+    select_fastdata_query_by_suffix_from: PreparedStatement,
     insert_last_processed_block_height_query: PreparedStatement,
     select_last_processed_block_height_query: PreparedStatement,
 
@@ -18,6 +26,11 @@ pub struct ScyllaDb {
 }
 
 pub fn create_rustls_client_config() -> Arc<ClientConfig> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .expect("Failed to install default provider");
+    }
     let ca_cert_path =
         env::var("SCYLLA_SSL_CA").expect("SCYLLA_SSL_CA environment variable not set");
     let client_cert_path =
@@ -79,12 +92,17 @@ impl ScyllaDb {
         Self::create_tables(&scylla_session).await?;
 
         Ok(Self {
-            insert_blob_query: Self::prepare_query(
+            insert_fastdata_query: Self::prepare_query(
                 &scylla_session,
                 "INSERT INTO blobs (receipt_id, action_index, suffix, data, tx_hash, signer_id, predecessor_id, current_account_id, block_height, block_timestamp, shard_id, receipt_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 scylla::frame::types::Consistency::LocalQuorum,
             )
             .await?,
+            select_fastdata_query_by_suffix_from: Self::prepare_query(
+                &scylla_session,
+                "SELECT * FROM blobs WHERE suffix = ? AND block_height >= ? AND block_height <= ?",
+                scylla::frame::types::Consistency::LocalOne,
+            ).await?,
             insert_last_processed_block_height_query: Self::prepare_query(
                 &scylla_session,
                 "INSERT INTO meta (suffix, last_processed_block_height) VALUES (?, ?)",
@@ -163,25 +181,35 @@ impl ScyllaDb {
 
     pub async fn add_data(&self, fastdata: FastData) -> anyhow::Result<()> {
         self.scylla_session
-            .execute_unpaged(
-                &self.insert_blob_query,
-                (
-                    fastdata.receipt_id.to_string(),
-                    fastdata.action_index as i32,
-                    fastdata.suffix.to_string(),
-                    fastdata.data,
-                    fastdata.tx_hash.map(|h| h.to_string()),
-                    fastdata.signer_id.to_string(),
-                    fastdata.predecessor_id.to_string(),
-                    fastdata.current_account_id.to_string(),
-                    fastdata.block_height as i64,
-                    fastdata.block_timestamp as i64,
-                    fastdata.shard_id as i32,
-                    fastdata.receipt_index as i32,
-                ),
-            )
+            .execute_unpaged(&self.insert_fastdata_query, FastDataRow::from(fastdata))
             .await?;
         Ok(())
+    }
+
+    /// Fetches all fast data for a given suffix and block height range (inclusive both ends).
+    pub async fn get_suffix_data(
+        &self,
+        suffix: &str,
+        from_block_height: u64,
+        to_block_height: u64,
+    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<FastData>>> {
+        let rows_stream = self
+            .scylla_session
+            .execute_iter(
+                self.select_fastdata_query_by_suffix_from.clone(),
+                (
+                    suffix.to_string(),
+                    from_block_height as i64,
+                    to_block_height as i64,
+                ),
+            )
+            .await?
+            .rows_stream::<FastDataRow>()?;
+        // Making an iterator from the stream
+        Ok(rows_stream.map(|row| {
+            row.map(|row| row.into())
+                .map_err(|e| anyhow::anyhow!("Failed to parse row: {:?}", e))
+        }))
     }
 
     pub async fn set_last_processed_block_height(

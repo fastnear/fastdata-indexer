@@ -635,6 +635,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastfs-sub-indexer"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "ctrlc",
+ "dotenv",
+ "fastnear-primitives",
+ "scylla",
+ "scylladb",
+ "suffix-fetcher",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fastnear-neardata-fetcher"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1419,6 +1436,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "scylla",
+ "scylladb",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2356,6 +2374,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "scylladb"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "fastnear-primitives",
+ "futures",
+ "rustls",
+ "scylla",
+ "tracing",
+]
+
+[[package]]
 name = "secp256k1"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2638,6 +2668,20 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "suffix-fetcher"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "fastnear-primitives",
+ "futures",
+ "rustls",
+ "scylla",
+ "scylladb",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "syn"

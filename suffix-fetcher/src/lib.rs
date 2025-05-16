@@ -10,6 +10,18 @@ use tokio::sync::mpsc;
 
 const FETCHER: &str = "suffix-fetcher";
 
+#[derive(Debug, Clone)]
+pub enum SuffixFetcherUpdate {
+    FastData(Box<FastData>),
+    EndOfRange(BlockHeight),
+}
+
+impl From<FastData> for SuffixFetcherUpdate {
+    fn from(value: FastData) -> Self {
+        Self::FastData(Box::new(value))
+    }
+}
+
 pub struct SuffixFetcher {
     pub scylladb: Arc<ScyllaDb>,
 }
@@ -33,7 +45,7 @@ impl SuffixFetcher {
                     .expect("Can't connect to scylla");
                 tracing::info!(target: FETCHER, "Connected to Scylla");
 
-                Arc::new(ScyllaDb::new(chain_id, scylla_session).await?)
+                Arc::new(ScyllaDb::new(chain_id, scylla_session, false).await?)
             }
         };
         Ok(Self { scylladb })
@@ -46,11 +58,12 @@ impl SuffixFetcher {
     pub async fn start(
         self,
         config: SuffixFetcherConfig,
-        sink: mpsc::Sender<FastData>,
+        sink: mpsc::Sender<SuffixFetcherUpdate>,
         is_running: Arc<AtomicBool>,
     ) {
         let mut from_block_height = config.start_block_height.unwrap_or(0);
         tracing::info!(target: FETCHER, "Starting suffix fetcher with suffix {:?} from {}", config.suffix, from_block_height);
+        let mut last_fastdata_block_height = None;
         while is_running.load(Ordering::SeqCst) {
             let last_block_height = self
                 .scylladb
@@ -80,17 +93,31 @@ impl SuffixFetcher {
                 }
                 match fastdata {
                     Ok(fastdata) => {
-                        sink.send(fastdata)
+                        if let Some(last_fastdata_block_height) = last_fastdata_block_height {
+                            if fastdata.block_height > last_fastdata_block_height {
+                                sink.send(SuffixFetcherUpdate::EndOfRange(
+                                    last_fastdata_block_height,
+                                ))
+                                .await
+                                .expect("Error sending end of range to sink");
+                            }
+                        }
+                        last_fastdata_block_height = Some(fastdata.block_height);
+                        sink.send(fastdata.into())
                             .await
-                            .expect("Error sending row to sink");
+                            .expect("Error sending fastdata to sink");
                     }
                     Err(e) => {
-                        tracing::error!(target: FETCHER, "Error fetching row: {:?}", e);
-                        panic!("TODO: Error fetching row: {:?}", e);
+                        tracing::error!(target: FETCHER, "Error fetching fastdata: {:?}", e);
+                        panic!("TODO: Error fetching fastdata: {:?}", e);
                     }
                 }
             }
+            sink.send(SuffixFetcherUpdate::EndOfRange(last_block_height))
+                .await
+                .expect("Error sending end of range to sink");
             from_block_height = last_block_height + 1;
+            last_fastdata_block_height = None;
         }
         tracing::info!(target: FETCHER, "Stopped suffix fetcher");
     }

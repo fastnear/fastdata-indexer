@@ -18,3 +18,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 ctrlc.workspace = true
 anyhow.workspace = true
+borsh.workspace = true
+scylla.workspace = true

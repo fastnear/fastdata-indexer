@@ -5,7 +5,7 @@ use scylla::{DeserializeRow, SerializeRow};
 
 pub const UNIVERSAL_SUFFIX: &str = "*";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FastData {
     pub receipt_id: CryptoHash,
     pub action_index: u32,

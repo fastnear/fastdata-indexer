@@ -639,9 +639,11 @@ name = "fastfs-sub-indexer"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "borsh",
  "ctrlc",
  "dotenv",
  "fastnear-primitives",
+ "scylla",
  "scylladb",
  "suffix-fetcher",
  "tokio",

@@ -1,3 +1,10 @@
+mod fastfs;
+mod scylla_types;
+
+use crate::fastfs::FastfsData;
+use crate::scylla_types::{
+    add_fastfs_fastdata, create_tables, prepare_insert_query, FastfsFastData,
+};
 use dotenv::dotenv;
 use fastnear_primitives::near_indexer_primitives::types::BlockHeight;
 use fastnear_primitives::types::ChainId;
@@ -5,7 +12,7 @@ use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use suffix_fetcher::{SuffixFetcher, SuffixFetcherConfig};
+use suffix_fetcher::{SuffixFetcher, SuffixFetcherConfig, SuffixFetcherUpdate};
 use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "fastfs-sub-indexer";
@@ -30,6 +37,14 @@ async fn main() {
 
     let scylladb = fetcher.get_scylladb();
 
+    create_tables(&scylladb)
+        .await
+        .expect("Error creating tables");
+
+    let insert_query = prepare_insert_query(&scylladb)
+        .await
+        .expect("Error preparing insert query");
+
     let last_processed_block_height = scylladb
         .get_last_processed_block_height(SUFFIX)
         .await
@@ -53,13 +68,6 @@ async fn main() {
     })
     .expect("Error setting Ctrl+C handler");
 
-    let block_update_interval = std::time::Duration::from_millis(
-        env::var("BLOCK_UPDATE_INTERVAL_MS")
-            .ok()
-            .map(|ms| ms.parse().expect("Invalid number of blocks"))
-            .unwrap_or(5000),
-    );
-
     tracing::info!(target: PROJECT_ID,
         "Starting {:?} {} fetcher from height {}",
         SUFFIX,
@@ -78,89 +86,50 @@ async fn main() {
         is_running.clone(),
     ));
 
-    let mut last_block_update = std::time::SystemTime::now();
-    while let Some(fastdata) = receiver.recv().await {
-        let block_height = fastdata.block_height;
-        tracing::info!(target: PROJECT_ID, "Received fastdata: {} {} {}", block_height, fastdata.receipt_id, fastdata.action_index);
-        //
-        // let mut data = vec![];
-        //
-        // for shard in block.shards {
-        //     for (receipt_index, reo) in shard.receipt_execution_outcomes.into_iter().enumerate() {
-        //         let receipt = reo.receipt;
-        //         let receipt_id = receipt.receipt_id;
-        //         let predecessor_id = receipt.predecessor_id;
-        //         let current_account_id = receipt.receiver_id;
-        //         let tx_hash = reo.tx_hash;
-        //         if let ReceiptEnumView::Action {
-        //             signer_id, actions, ..
-        //         } = receipt.receipt
-        //         {
-        //             for (action_index, action) in actions.into_iter().enumerate() {
-        //                 if let ActionView::FunctionCall {
-        //                     method_name, args, ..
-        //                 } = action
-        //                 {
-        //                     if method_name.starts_with(FASTDATA_PREFIX) {
-        //                         let suffix = method_name.strip_prefix(FASTDATA_PREFIX).unwrap();
-        //                         data.push(FastData {
-        //                             receipt_id,
-        //                             action_index: action_index as _,
-        //                             suffix: suffix.to_string(),
-        //                             data: args.to_vec(),
-        //                             tx_hash,
-        //                             signer_id: signer_id.clone(),
-        //                             predecessor_id: predecessor_id.clone(),
-        //                             current_account_id: current_account_id.clone(),
-        //                             block_height,
-        //                             block_timestamp,
-        //                             shard_id: shard.shard_id.into(),
-        //                             receipt_index: receipt_index as _,
-        //                         });
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-        //
-        // let current_time = std::time::SystemTime::now();
-        // let duration = current_time
-        //     .duration_since(last_block_update)
-        //     .expect("Time went backwards");
-        // let mut need_to_save_last_processed_block_height = duration >= block_update_interval;
-        //
-        // if !data.is_empty() {
-        //     tracing::info!(target: PROJECT_ID, "Inserting {} fastdata rows into Scylla", data.len());
-        //     let futures = futures::future::join_all(
-        //         data.into_iter().map(|fastdata| scylladb.add_data(fastdata)),
-        //     );
-        //     // Wait for all futures to complete
-        //     let result = futures.await.into_iter().collect::<anyhow::Result<()>>();
-        //     if let Err(e) = result {
-        //         tracing::error!(target: PROJECT_ID, "Error inserting data into Scylla: {:?}", e);
-        //         panic!("TODO retry: {:?}", e);
-        //     }
-        //     need_to_save_last_processed_block_height = true;
-        // }
-        //
-        // if !is_running.load(Ordering::SeqCst) {
-        //     tracing::info!(target: PROJECT_ID, "Shutting down fetcher");
-        //     need_to_save_last_processed_block_height = true;
-        // }
-        //
-        // if need_to_save_last_processed_block_height {
-        //     tracing::info!(target: PROJECT_ID, "Saving last processed block height: {}", block_height);
-        //     scylladb
-        //         .set_last_processed_block_height(UNIVERSAL_SUFFIX, block_height)
-        //         .await
-        //         .expect("Error setting last processed block height");
-        //     last_block_update = current_time;
-        // }
-        //
-        // if !is_running.load(Ordering::SeqCst) {
-        //     break;
-        // }
+    while let Some(update) = receiver.recv().await {
+        match update {
+            SuffixFetcherUpdate::FastData(fastdata) => {
+                tracing::info!(target: PROJECT_ID, "Received fastdata: {} {} {}", fastdata.block_height, fastdata.receipt_id, fastdata.action_index);
+                if let Ok(FastfsData::Simple(simple_fastfs)) = borsh::from_slice(&fastdata.data) {
+                    if simple_fastfs.is_valid() {
+                        let (mime_type, content) = simple_fastfs
+                            .content
+                            .map(|c| (Some(c.mime_type), Some(c.content)))
+                            .unwrap_or((None, None));
+                        let fastfs_fastdata = FastfsFastData {
+                            receipt_id: fastdata.receipt_id,
+                            action_index: fastdata.action_index,
+                            tx_hash: fastdata.tx_hash,
+                            signer_id: fastdata.signer_id,
+                            predecessor_id: fastdata.predecessor_id,
+                            current_account_id: fastdata.current_account_id,
+                            block_height: fastdata.block_height,
+                            block_timestamp: fastdata.block_timestamp,
+                            shard_id: fastdata.shard_id,
+                            receipt_index: fastdata.receipt_index,
+                            mime_type,
+                            relative_path: simple_fastfs.relative_path,
+                            content,
+                        };
+                        tracing::info!(target: PROJECT_ID, "FastFS data {} bytes: {}/{}/{}", fastfs_fastdata.content.as_ref().map(|v| v.len()).unwrap_or(0), fastfs_fastdata.predecessor_id, fastfs_fastdata.current_account_id, fastfs_fastdata.relative_path);
+                        add_fastfs_fastdata(&scylladb, &insert_query, fastfs_fastdata)
+                            .await
+                            .expect("Error adding FastFS data to ScyllaDB");
+                    }
+                }
+            }
+            SuffixFetcherUpdate::EndOfRange(block_height) => {
+                tracing::info!(target: PROJECT_ID, "Saving last processed block height: {}", block_height);
+                scylladb
+                    .set_last_processed_block_height(SUFFIX, block_height)
+                    .await
+                    .expect("Error setting last processed block height");
+                if !is_running.load(Ordering::SeqCst) {
+                    tracing::info!(target: PROJECT_ID, "Shutting down...");
+                    break;
+                }
+            }
+        };
     }
 
     tracing::info!(target: PROJECT_ID, "Successfully shut down");

@@ -35,7 +35,7 @@ async fn main() {
 
     tracing::info!(target: PROJECT_ID, "Connected to Scylla");
 
-    let scylladb = ScyllaDb::new(chain_id, scylla_session)
+    let scylladb = ScyllaDb::new(chain_id, scylla_session, true)
         .await
         .expect("Can't create scylla db");
 

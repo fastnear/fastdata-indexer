@@ -14,7 +14,7 @@ use rustls::{ClientConfig, RootCertStore};
 use std::env;
 use std::sync::Arc;
 
-const SCYLLADB: &str = "scylladb";
+pub const SCYLLADB: &str = "scylladb";
 
 pub struct ScyllaDb {
     insert_fastdata_query: PreparedStatement,
@@ -22,7 +22,7 @@ pub struct ScyllaDb {
     insert_last_processed_block_height_query: PreparedStatement,
     select_last_processed_block_height_query: PreparedStatement,
 
-    scylla_session: Session,
+    pub scylla_session: Session,
 }
 
 pub fn create_rustls_client_config() -> Arc<ClientConfig> {
@@ -84,12 +84,18 @@ impl ScyllaDb {
         Ok(())
     }
 
-    pub async fn new(chain_id: ChainId, scylla_session: Session) -> anyhow::Result<Self> {
+    pub async fn new(
+        chain_id: ChainId,
+        scylla_session: Session,
+        create_tables: bool,
+    ) -> anyhow::Result<Self> {
         // Self::create_keyspace(chain_id, &scylla_session).await?;
         scylla_session
             .use_keyspace(format!("fastdata_{chain_id}"), false)
             .await?;
-        Self::create_tables(&scylla_session).await?;
+        if create_tables {
+            Self::create_tables(&scylla_session).await?;
+        }
 
         Ok(Self {
             insert_fastdata_query: Self::prepare_query(
@@ -118,7 +124,7 @@ impl ScyllaDb {
         })
     }
 
-    async fn prepare_query(
+    pub async fn prepare_query(
         scylla_db_session: &Session,
         query_text: &str,
         consistency: scylla::frame::types::Consistency,

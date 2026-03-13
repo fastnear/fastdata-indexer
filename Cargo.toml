@@ -3,7 +3,7 @@ version = "1.1.0"
 authors = ["Fastnear Inc <hello@fastnear.com>"]
 edition = "2021"
 repository = "https://github.com/fastnear/libs"
-rust-version = "1.86.0"
+rust-version = "1.91.0"
 license = "MIT OR Apache-2.0"
 
 [workspace]
@@ -18,8 +18,8 @@ members = [
 
 [workspace.dependencies]
 dotenv = "0.15.0"
-fastnear-primitives = "0.34.5"
-fastnear-neardata-fetcher = "0.34.5"
+fastnear-primitives = "0.35.0-rc.1"
+fastnear-neardata-fetcher = "0.35.0-rc.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3.12.0"

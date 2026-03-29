@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 const PROJECT_ID: &str = "kv-sub-indexer";
 const MAX_NUM_KEYS: usize = 256;
 const MAX_KEY_LENGTH: usize = 1024;
+const MAX_VALUE_LENGTH: usize = 262144;
 
 #[tokio::main]
 async fn main() {
@@ -96,16 +97,20 @@ async fn main() {
                 {
                     if let Some(json_object) = json_value.as_object() {
                         if json_object.len() > MAX_NUM_KEYS {
-                            tracing::debug!(target: PROJECT_ID, "Received Key-Value Fastdata with too many keys: {}", json_object.len());
+                            tracing::warn!(target: PROJECT_ID, "Received Key-Value Fastdata with too many keys: {}", json_object.len());
                             continue;
                         }
                         for (key, value) in json_object {
                             if key.len() > MAX_KEY_LENGTH {
-                                tracing::debug!(target: PROJECT_ID, "Received Key-Value Fastdata with invalid key: {}", key.len());
+                                tracing::warn!(target: PROJECT_ID, "Received Key-Value Fastdata with invalid key: {}", key.len());
                                 continue;
                             }
                             let serialized_value = serde_json::to_string(value)
                                 .expect("Error serializing value in Key-Value Fastdata");
+                            if serialized_value.len() > MAX_VALUE_LENGTH {
+                                tracing::warn!(target: PROJECT_ID, "Skipping Key-Value with oversized value: key={}, value_len={}", key, serialized_value.len());
+                                continue;
+                            }
                             let order_id = scylladb::compute_order_id(&fastdata);
                             let row = FastDataKv {
                                 receipt_id: fastdata.receipt_id,
@@ -128,7 +133,7 @@ async fn main() {
                         continue;
                     }
                 }
-                tracing::debug!(target: PROJECT_ID, "Received invalid Key-Value Fastdata");
+                tracing::warn!(target: PROJECT_ID, "Received invalid Key-Value Fastdata");
             }
             SuffixFetcherUpdate::EndOfRange(block_height) => {
                 tracing::info!(target: PROJECT_ID, "Saving last processed block height {} with {} rows", block_height, rows.len());

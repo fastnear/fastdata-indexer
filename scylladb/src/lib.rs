@@ -60,21 +60,25 @@ pub fn create_rustls_client_config() -> Arc<ClientConfig> {
 
 impl ScyllaDb {
     pub async fn new_scylla_session() -> anyhow::Result<Session> {
-        let scylla_url = env::var("SCYLLA_URL").expect("SCYLLA_DB_URL must be set");
-        let scylla_username = env::var("SCYLLA_USERNAME").expect("SCYLLA_USERNAME must be set");
-        let scylla_password = env::var("SCYLLA_PASSWORD").expect("SCYLLA_PASSWORD must be set");
+        let scylla_url = env::var("SCYLLA_URL").expect("SCYLLA_URL must be set");
 
-        let session: Session = SessionBuilder::new()
-            .known_node(scylla_url)
-            .tls_context(Some(create_rustls_client_config()))
-            .authenticator_provider(Arc::new(
-                scylla::authentication::PlainTextAuthenticator::new(
-                    scylla_username,
-                    scylla_password,
-                ),
-            ))
-            .build()
-            .await?;
+        let mut builder = SessionBuilder::new().known_node(scylla_url);
+
+        // TLS is optional — enabled when SCYLLA_SSL_CA is set
+        if env::var("SCYLLA_SSL_CA").is_ok() {
+            builder = builder.tls_context(Some(create_rustls_client_config()));
+        }
+
+        // Auth is optional — enabled when SCYLLA_USERNAME is set
+        if let (Ok(username), Ok(password)) =
+            (env::var("SCYLLA_USERNAME"), env::var("SCYLLA_PASSWORD"))
+        {
+            builder = builder.authenticator_provider(Arc::new(
+                scylla::authentication::PlainTextAuthenticator::new(username, password),
+            ));
+        }
+
+        let session: Session = builder.build().await?;
 
         Ok(session)
     }

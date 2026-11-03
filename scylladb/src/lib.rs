@@ -1,7 +1,9 @@
 use futures::StreamExt;
 mod types;
+mod utils;
 
 pub use crate::types::{FastData, UNIVERSAL_SUFFIX};
+pub use crate::utils::*;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::statement::prepared::PreparedStatement;
@@ -17,10 +19,10 @@ use std::sync::Arc;
 pub const SCYLLADB: &str = "scylladb";
 
 pub struct ScyllaDb {
-    insert_fastdata_query: PreparedStatement,
-    select_fastdata_query_by_suffix_from: PreparedStatement,
-    insert_last_processed_block_height_query: PreparedStatement,
-    select_last_processed_block_height_query: PreparedStatement,
+    pub insert_fastdata_query: PreparedStatement,
+    pub select_fastdata_query_by_suffix_from: PreparedStatement,
+    pub insert_last_processed_block_height_query: PreparedStatement,
+    pub select_last_processed_block_height_query: PreparedStatement,
 
     pub scylla_session: Session,
 }
@@ -58,21 +60,30 @@ pub fn create_rustls_client_config() -> Arc<ClientConfig> {
 
 impl ScyllaDb {
     pub async fn new_scylla_session() -> anyhow::Result<Session> {
-        let scylla_url = env::var("SCYLLA_URL").expect("SCYLLA_DB_URL must be set");
-        let scylla_username = env::var("SCYLLA_USERNAME").expect("SCYLLA_USERNAME must be set");
-        let scylla_password = env::var("SCYLLA_PASSWORD").expect("SCYLLA_PASSWORD must be set");
+        // Comma-separated list of contact points, e.g. "ip1:9142,ip2:9142"
+        let scylla_urls = env::var("SCYLLA_URL").expect("SCYLLA_URL must be set");
+        let known_nodes = scylla_urls
+            .split(',')
+            .map(str::trim)
+            .filter(|node| !node.is_empty());
 
-        let session: Session = SessionBuilder::new()
-            .known_node(scylla_url)
-            .tls_context(Some(create_rustls_client_config()))
-            .authenticator_provider(Arc::new(
-                scylla::authentication::PlainTextAuthenticator::new(
-                    scylla_username,
-                    scylla_password,
-                ),
-            ))
-            .build()
-            .await?;
+        let mut builder = SessionBuilder::new().known_nodes(known_nodes);
+
+        // TLS is optional — enabled when SCYLLA_SSL_CA is set
+        if env::var("SCYLLA_SSL_CA").is_ok() {
+            builder = builder.tls_context(Some(create_rustls_client_config()));
+        }
+
+        // Auth is optional — enabled when SCYLLA_USERNAME is set
+        if let (Ok(username), Ok(password)) =
+            (env::var("SCYLLA_USERNAME"), env::var("SCYLLA_PASSWORD"))
+        {
+            builder = builder.authenticator_provider(Arc::new(
+                scylla::authentication::PlainTextAuthenticator::new(username, password),
+            ));
+        }
+
+        let session: Session = builder.build().await?;
 
         Ok(session)
     }
@@ -131,6 +142,9 @@ impl ScyllaDb {
     ) -> anyhow::Result<PreparedStatement> {
         let mut query = scylla::statement::Statement::new(query_text);
         query.set_consistency(consistency);
+        // Lets the driver retry on another node if a connection breaks. Every caller is a SELECT
+        // or a plain INSERT of bound values; don't use this for counters, LWTs or list appends.
+        query.set_is_idempotent(true);
         Ok(scylla_db_session.prepare(query).await?)
     }
 

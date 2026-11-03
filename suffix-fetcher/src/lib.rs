@@ -31,7 +31,7 @@ pub struct SuffixFetcher {
 /// This struct defines the parameters used to configure the behavior of the fetcher.
 pub struct SuffixFetcherConfig {
     /// The suffix to be fetched. This is a unique identifier used to determine
-    /// the specific data or range of data to be retrieved by the fetcher.
+    /// the specific data.
     pub suffix: String,
 
     /// The optional starting block height for the fetcher. If provided, the fetcher

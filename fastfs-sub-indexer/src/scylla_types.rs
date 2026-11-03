@@ -20,6 +20,9 @@ pub struct FastfsFastData {
     pub mime_type: Option<String>,
     pub relative_path: String,
     pub content: Option<Vec<u8>>,
+    pub offset: u32,
+    pub full_size: u32,
+    pub nonce: u32,
 }
 
 #[derive(Debug, Clone, DeserializeRow, SerializeRow)]
@@ -37,6 +40,9 @@ pub(crate) struct FastfsFastDataRow {
     pub mime_type: Option<String>,
     pub relative_path: String,
     pub content: Option<Vec<u8>>,
+    pub offset: i32,
+    pub full_size: i32,
+    pub nonce: i32,
 }
 
 impl From<FastfsFastDataRow> for FastfsFastData {
@@ -55,6 +61,9 @@ impl From<FastfsFastDataRow> for FastfsFastData {
             mime_type: row.mime_type,
             relative_path: row.relative_path,
             content: row.content,
+            offset: row.offset as u32,
+            full_size: row.full_size as u32,
+            nonce: row.nonce as u32,
         }
     }
 }
@@ -75,13 +84,16 @@ impl From<FastfsFastData> for FastfsFastDataRow {
             mime_type: data.mime_type,
             relative_path: data.relative_path,
             content: data.content,
+            offset: data.offset as i32,
+            full_size: data.full_size as i32,
+            nonce: data.nonce as i32,
         }
     }
 }
 
 pub(crate) async fn create_tables(scylla_db: &ScyllaDb) -> anyhow::Result<()> {
     let queries = [
-        "CREATE TABLE IF NOT EXISTS s_fastfs (
+        "CREATE TABLE IF NOT EXISTS s_fastfs_v2 (
             receipt_id text,
             action_index int,
             tx_hash text,
@@ -95,10 +107,13 @@ pub(crate) async fn create_tables(scylla_db: &ScyllaDb) -> anyhow::Result<()> {
             mime_type text,
             relative_path text,
             content blob,
-            PRIMARY KEY ((predecessor_id), current_account_id, relative_path)
+            offset int,
+            full_size int,
+            nonce int,
+            PRIMARY KEY ((predecessor_id), current_account_id, relative_path, offset)
         )",
-        "CREATE INDEX IF NOT EXISTS idx_s_fastfs_tx_hash ON s_fastfs (tx_hash)",
-        "CREATE INDEX IF NOT EXISTS idx_s_fastfs_receipt_id ON s_fastfs (receipt_id)",
+        "CREATE INDEX IF NOT EXISTS idx_s_fastfs_v2_tx_hash ON s_fastfs_v2 (tx_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_s_fastfs_v2_receipt_id ON s_fastfs_v2 (receipt_id)",
     ];
     for query in queries.iter() {
         tracing::debug!(target: SCYLLADB, "Creating table: {}", query);
@@ -112,10 +127,10 @@ pub(crate) async fn prepare_insert_query(
 ) -> anyhow::Result<PreparedStatement> {
     ScyllaDb::prepare_query(
         &scylla_db.scylla_session,
-    "INSERT INTO s_fastfs (receipt_id, action_index, tx_hash, signer_id, predecessor_id, current_account_id, block_height, block_timestamp, shard_id, receipt_index, mime_type, relative_path, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO s_fastfs_v2 (receipt_id, action_index, tx_hash, signer_id, predecessor_id, current_account_id, block_height, block_timestamp, shard_id, receipt_index, mime_type, relative_path, content, offset, full_size, nonce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         scylla::frame::types::Consistency::LocalQuorum,
     )
-    .await
+        .await
 }
 
 pub(crate) async fn add_fastfs_fastdata(

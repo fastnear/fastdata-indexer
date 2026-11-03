@@ -1,3 +1,4 @@
-.env
+.env*
 /target
 res
+Cargo.lock

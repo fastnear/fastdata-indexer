@@ -60,9 +60,14 @@ pub fn create_rustls_client_config() -> Arc<ClientConfig> {
 
 impl ScyllaDb {
     pub async fn new_scylla_session() -> anyhow::Result<Session> {
-        let scylla_url = env::var("SCYLLA_URL").expect("SCYLLA_URL must be set");
+        // Comma-separated list of contact points, e.g. "ip1:9142,ip2:9142"
+        let scylla_urls = env::var("SCYLLA_URL").expect("SCYLLA_URL must be set");
+        let known_nodes = scylla_urls
+            .split(',')
+            .map(str::trim)
+            .filter(|node| !node.is_empty());
 
-        let mut builder = SessionBuilder::new().known_node(scylla_url);
+        let mut builder = SessionBuilder::new().known_nodes(known_nodes);
 
         // TLS is optional — enabled when SCYLLA_SSL_CA is set
         if env::var("SCYLLA_SSL_CA").is_ok() {
@@ -137,6 +142,9 @@ impl ScyllaDb {
     ) -> anyhow::Result<PreparedStatement> {
         let mut query = scylla::statement::Statement::new(query_text);
         query.set_consistency(consistency);
+        // Lets the driver retry on another node if a connection breaks. Every caller is a SELECT
+        // or a plain INSERT of bound values; don't use this for counters, LWTs or list appends.
+        query.set_is_idempotent(true);
         Ok(scylla_db_session.prepare(query).await?)
     }
 

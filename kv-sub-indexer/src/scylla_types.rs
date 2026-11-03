@@ -261,6 +261,8 @@ pub(crate) async fn add_kv_rows(
     // Write s_kv rows in chunks
     for chunk in kv_rows.chunks(MAX_BATCH_ROWS) {
         let mut batch = Batch::new(BatchType::Logged);
+        // A batch doesn't inherit this from its prepared statements.
+        batch.set_is_idempotent(true);
         let mut values: Vec<&dyn SerializeRow> = Vec::with_capacity(chunk.len());
         for kv in chunk {
             batch.append_statement(kv_insert_query.clone());
@@ -272,6 +274,7 @@ pub(crate) async fn add_kv_rows(
     // Write s_kv_last rows in chunks (with USING TIMESTAMP for idempotent re-processing)
     for chunk in kv_last_rows.chunks(MAX_BATCH_ROWS) {
         let mut batch = Batch::new(BatchType::Logged);
+        batch.set_is_idempotent(true);
         let mut values: Vec<&dyn SerializeRow> = Vec::with_capacity(chunk.len());
         for kv_last in chunk {
             batch.append_statement(kv_last_insert_query.clone());
